@@ -1,0 +1,10 @@
+{
+  "name": "Daily Briefing",
+  "short_name": "Briefing",
+  "description": "A $0, self-hosted daily topic-intelligence briefing.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "icons": []
+}
