@@ -22,9 +22,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
-      - run: npm ci
+      # npm install, not npm ci: no package-lock.json is committed (run
+      # `npm install` locally once and commit it yourself if you want
+      # reproducible, pinned installs here instead).
+      - run: npm install
 
       - run: npx prisma generate
 
