@@ -1,0 +1,48 @@
+name: Daily briefing pipeline
+
+# Runs every 30 minutes so each user's stored local briefing time (not a
+# hard-coded timezone) gets checked promptly — see src/lib/push/webpush.ts
+# getUsersDueForBriefingNow(). The pipeline itself (ingest/cluster/rank/
+# synthesize) is idempotent and cheap to re-run thanks to conditional-GET +
+# content-hash dedup, so running it this often does not mean redoing work.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {} # manual trigger, e.g. for a first test run
+
+# Hard timeout — see README § accidental-charge protection. A hung job gets
+# killed instead of quietly burning the monthly Actions-minutes budget.
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # npm install, not npm ci: no package-lock.json is committed (run
+      # `npm install` locally once and commit it yourself if you want
+      # reproducible, pinned installs here instead).
+      - run: npm install
+
+      - run: npx prisma generate
+
+      - name: Run daily pipeline
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          # Optional Layer 2/3 synthesis providers — leave these repo secrets
+          # unset to stay on the required, free ExtractiveSynthesisProvider.
+          PREFERRED_SYNTHESIS_PROVIDER: ${{ secrets.PREFERRED_SYNTHESIS_PROVIDER }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          OLLAMA_HOST: ${{ secrets.OLLAMA_HOST }}
+        run: npm run pipeline

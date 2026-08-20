@@ -1,0 +1,562 @@
+// Daily Briefing — data model
+// Design principle: Topic/Source/Entity/Creator/SourceCatalogEntry are GLOBAL,
+// shared objects (research happens once). Everything about a specific user's
+// relationship to them lives in small join tables (TopicRead, TopicFollow, ...).
+// See README.md for the full architecture writeup.
+
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [vector]
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Users & settings
+// ───────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  timezone     String   @default("America/Los_Angeles")
+  briefingHour Int      @default(8) // local hour, 0-23 — "8am" regardless of timezone
+  briefingMin  Int      @default(0)
+  // Set when the user taps "Remind me later" on the whole-digest push
+  // notification (distinct from a per-topic TopicReminder). Cleared once
+  // the snoozed push goes out. Server-driven so it works regardless of
+  // whether any browser service worker is still alive to run a timer.
+  pendingDigestReminderAt DateTime?
+  createdAt    DateTime @default(now())
+
+  pushSubscriptions     PushSubscription[]
+  sourcePreferences     UserSourcePreference[]
+  customSources         UserCustomSource[]
+  creatorFollows        UserCreatorFollow[]
+  addedCreators         Creator[]              @relation("CreatorAddedBy")
+  topicReads            TopicRead[]
+  topicFollows          TopicFollow[]
+  topicReminders        TopicReminder[]
+  topicSaves            TopicSave[]
+  videoCoverageRequests VideoCoverageRequest[]
+  topicFeedback         TopicFeedback[]
+  rankingWeights        RankingWeights?
+  entityAffinities      UserEntityAffinity[]
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Source catalog (global, app-maintained) + per-user preferences
+// ───────────────────────────────────────────────────────────────────
+
+enum SourceType {
+  RSS
+  YOUTUBE_CHANNEL
+  SUBSTACK
+  PRIMARY
+}
+
+enum SourceTier {
+  TIER_1 // wire services, primary sources, top-tier reporting
+  TIER_2 // strong domain-specific publications
+  DISCOVERY // creators, social posts, niche blogs — can surface, can't alone verify
+}
+
+model SourceCatalogEntry {
+  id                  String     @id @default(cuid())
+  name                String
+  feedUrl             String     @unique
+  sourceType          SourceType
+  tier                SourceTier
+  category            String[]
+  isPrimary           Boolean    @default(false)
+  active              Boolean    @default(true)
+  consecutiveFailures Int        @default(0)
+  createdAt           DateTime   @default(now())
+
+  userPreferences UserSourcePreference[]
+  ingestionState  IngestionState?
+}
+
+model UserSourcePreference {
+  id             String             @id @default(cuid())
+  userId         String
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  catalogEntryId String
+  catalogEntry   SourceCatalogEntry @relation(fields: [catalogEntryId], references: [id], onDelete: Cascade)
+  enabled        Boolean            @default(true)
+
+  @@unique([userId, catalogEntryId])
+}
+
+model UserCustomSource {
+  id                  String     @id @default(cuid())
+  userId              String
+  user                User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label               String
+  feedUrl             String
+  sourceType          SourceType
+  active              Boolean    @default(true)
+  consecutiveFailures Int        @default(0)
+  createdAt           DateTime   @default(now())
+
+  ingestionState IngestionState?
+
+  @@unique([userId, feedUrl])
+}
+
+// Tracks incremental-polling state so we never refetch/reprocess unchanged feeds.
+model IngestionState {
+  id             String              @id @default(cuid())
+  catalogEntryId String?             @unique
+  catalogEntry   SourceCatalogEntry? @relation(fields: [catalogEntryId], references: [id], onDelete: Cascade)
+  customSourceId String?             @unique
+  customSource   UserCustomSource?   @relation(fields: [customSourceId], references: [id], onDelete: Cascade)
+  lastPolledAt   DateTime?
+  etag           String?
+  lastModified   String?
+  lastSuccessAt  DateTime?
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Creators — global entities, per-user follows (separate from publications)
+// ───────────────────────────────────────────────────────────────────
+
+enum Platform {
+  YOUTUBE
+  TIKTOK
+  INSTAGRAM
+  X
+  SUBSTACK
+}
+
+enum IngestionMethod {
+  RSS
+  API
+  MANUAL
+}
+
+model Creator {
+  id            String   @id @default(cuid())
+  displayName   String
+  addedByUserId String?
+  addedByUser   User?    @relation("CreatorAddedBy", fields: [addedByUserId], references: [id])
+  createdAt     DateTime @default(now())
+
+  platformAccounts CreatorPlatformAccount[]
+  follows          UserCreatorFollow[]
+  socialMentions   SocialMention[]
+}
+
+model CreatorPlatformAccount {
+  id              String          @id @default(cuid())
+  creatorId       String
+  creator         Creator         @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  platform        Platform
+  handle          String
+  url             String
+  ingestionMethod IngestionMethod
+  active          Boolean         @default(true)
+
+  @@unique([creatorId, platform])
+}
+
+model UserCreatorFollow {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  creatorId String
+  creator   Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  platformPrefs UserCreatorPlatformPref[]
+
+  @@unique([userId, creatorId])
+}
+
+model UserCreatorPlatformPref {
+  id                  String            @id @default(cuid())
+  userCreatorFollowId String
+  userCreatorFollow   UserCreatorFollow @relation(fields: [userCreatorFollowId], references: [id], onDelete: Cascade)
+  platform            Platform
+  enabled             Boolean           @default(true)
+
+  @@unique([userCreatorFollowId, platform])
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Canonical entities — "OpenAI" / "Open AI" / "OpenAI Inc." → one row
+// ───────────────────────────────────────────────────────────────────
+
+enum EntityType {
+  COMPANY
+  PERSON
+  PRODUCT
+  ORG
+}
+
+model Entity {
+  id            String     @id @default(cuid())
+  canonicalName String
+  type          EntityType
+  createdAt     DateTime   @default(now())
+
+  aliases        EntityAlias[]
+  topicEntities  TopicEntity[]
+  userAffinities UserEntityAffinity[]
+}
+
+enum AliasSource {
+  AUTO
+  MANUAL
+}
+
+model EntityAlias {
+  id        String      @id @default(cuid())
+  entityId  String
+  entity    Entity      @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  aliasText String
+  source    AliasSource @default(AUTO)
+
+  @@unique([aliasText])
+}
+
+// Per-user affinity counter — nudged by TopicFeedback, feeds the ranking formula's
+// "your_interest_overlap" term. Deterministic reinforcement, no ML training involved.
+model UserEntityAffinity {
+  id       String @id @default(cuid())
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entityId String
+  entity   Entity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  score    Int    @default(0)
+
+  @@unique([userId, entityId])
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Topics — the persistent, shared, central object
+// ───────────────────────────────────────────────────────────────────
+
+enum VerificationStatus {
+  VERIFIED // corroborated by at least one Tier 1/2 source
+  UNVERIFIED // surfaced only by a discovery-tier source so far
+}
+
+enum SynthesisMethod {
+  EXTRACTIVE
+  LOCAL_LLM
+  KIMI
+  ANTHROPIC
+  OPENAI
+  GEMINI
+}
+
+model Topic {
+  id    String @id @default(cuid())
+  title String
+  slug  String @unique
+
+  // Structured briefing sections (see README § Layer 1 synthesis)
+  whatHappened        String?
+  whatChangedToday    String?
+  howWeGotHere        String?
+  whyItMatters        String?
+  whyPeopleAreTalking String?
+  whatToWatchNext     String?
+
+  category           String[]
+  verificationStatus VerificationStatus @default(UNVERIFIED)
+  synthesisMethod    SynthesisMethod    @default(EXTRACTIVE)
+  rankScore          Float              @default(0)
+  manualBoost        Int                @default(0)
+  irrelevant         Boolean            @default(false)
+
+  // pgvector embedding of the canonical title+summary, 384-dim (MiniLM-L6-v2)
+  embedding Unsupported("vector(384)")?
+
+  firstSeenAt   DateTime @default(now())
+  lastUpdatedAt DateTime @updatedAt
+
+  updates               TopicUpdate[]
+  sources               Source[]
+  socialMentions        SocialMention[]
+  entities              TopicEntity[]
+  reads                 TopicRead[]
+  follows               TopicFollow[]
+  reminders             TopicReminder[]
+  saves                 TopicSave[]
+  videoCoverageRequests VideoCoverageRequest[]
+  feedback              TopicFeedback[]
+  metricSnapshots       TopicMetricSnapshot[]
+  duplicateFlagsA       TopicDuplicateFlag[]   @relation("DuplicateA")
+  duplicateFlagsB       TopicDuplicateFlag[]   @relation("DuplicateB")
+
+  @@index([lastUpdatedAt])
+}
+
+// Append-only development timeline. "What changed today" reads from the latest
+// row here; "how we got here" reads from earlier ones. Keeps a Topic from
+// collapsing into a single stale summary as a story develops over days.
+model TopicUpdate {
+  id                    String   @id @default(cuid())
+  topicId               String
+  topic                 Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  body                  String
+  publishedInDigestDate DateTime
+  createdAt             DateTime @default(now())
+
+  @@index([topicId, createdAt])
+}
+
+model Source {
+  id          String     @id @default(cuid())
+  topicId     String
+  topic       Topic      @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  publication String
+  url         String
+  excerpt     String? // short description/snippet — never the full article body
+  author      String?
+  publishedAt DateTime?
+  isPrimary   Boolean    @default(false)
+  tier        SourceTier
+  contentHash String // hash of url+title+pubdate, used to skip re-ingesting the same item
+  createdAt   DateTime   @default(now())
+
+  extractedSentences ExtractedSentence[]
+
+  @@unique([contentHash])
+  @@index([topicId])
+}
+
+enum BriefingSection {
+  WHAT_HAPPENED
+  WHAT_CHANGED_TODAY
+  HOW_WE_GOT_HERE
+  WHY_IT_MATTERS
+  WHY_PEOPLE_ARE_TALKING
+  WHAT_TO_WATCH_NEXT
+}
+
+// A single scored, source-attributed sentence used to build a briefing section.
+// Every sentence in a Topic's prose traces back to exactly one Source row.
+model ExtractedSentence {
+  id       String          @id @default(cuid())
+  sourceId String
+  source   Source          @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  section  BriefingSection
+  text     String
+  score    Float
+
+  @@index([sourceId])
+}
+
+enum AttachedVia {
+  AUTO
+  MANUAL
+}
+
+model SocialMention {
+  id            String      @id @default(cuid())
+  topicId       String
+  topic         Topic       @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  platform      Platform
+  url           String
+  creatorId     String?
+  creator       Creator?    @relation(fields: [creatorId], references: [id])
+  accountName   String? // raw label, used when the creator hasn't been added yet
+  attachedVia   AttachedVia @default(MANUAL)
+  surfacedTopic Boolean     @default(false) // was this the discovery source for the topic?
+  createdAt     DateTime    @default(now())
+
+  @@index([topicId])
+}
+
+model TopicEntity {
+  id             String @id @default(cuid())
+  topicId        String
+  topic          Topic  @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  entityId       String
+  entity         Entity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  relevanceScore Float  @default(0)
+
+  @@unique([topicId, entityId])
+}
+
+// Clustering's "not sure" bucket — kept separate rather than guessed at.
+model TopicDuplicateFlag {
+  id         String   @id @default(cuid())
+  topicAId   String
+  topicA     Topic    @relation("DuplicateA", fields: [topicAId], references: [id], onDelete: Cascade)
+  topicBId   String
+  topicB     Topic    @relation("DuplicateB", fields: [topicBId], references: [id], onDelete: Cascade)
+  confidence Float
+  resolved   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@unique([topicAId, topicBId])
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Your relationship to a Topic — four independent lifecycles, on purpose
+// ───────────────────────────────────────────────────────────────────
+
+model TopicRead {
+  id      String   @id @default(cuid())
+  userId  String
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topicId String
+  topic   Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  readAt  DateTime @default(now())
+
+  @@unique([userId, topicId])
+}
+
+model TopicFollow {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topicId    String
+  topic      Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  followedAt DateTime @default(now())
+
+  @@unique([userId, topicId])
+}
+
+model TopicReminder {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topicId     String
+  topic       Topic     @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  remindAt    DateTime
+  fulfilledAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([remindAt, fulfilledAt])
+}
+
+model TopicSave {
+  id      String   @id @default(cuid())
+  userId  String
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topicId String
+  topic   Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  note    String?
+  savedAt DateTime @default(now())
+
+  @@unique([userId, topicId])
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Demand signals — modeled now, dormant UI-wise until multi-user (Phase 1+)
+// ───────────────────────────────────────────────────────────────────
+
+model VideoCoverageRequest {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topicId     String
+  topic       Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  requestedAt DateTime @default(now())
+
+  @@unique([userId, topicId])
+}
+
+model TopicMetricSnapshot {
+  id                   String   @id @default(cuid())
+  topicId              String
+  topic                Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  date                 DateTime
+  followerCount        Int      @default(0)
+  coverageRequestCount Int      @default(0)
+
+  @@unique([topicId, date])
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Ranking & feedback — configurable weights, not hard-coded logic
+// ───────────────────────────────────────────────────────────────────
+
+model RankingWeights {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  sourceCount              Float @default(1.0)
+  sourceReputation         Float @default(1.5)
+  coverageVelocity         Float @default(1.2)
+  crossSourceTypeBonus     Float @default(1.0)
+  interestOverlap          Float @default(2.0)
+  followedCreatorOverlap   Float @default(1.5)
+  followupBonus            Float @default(1.8)
+  novelty                  Float @default(0.5)
+  primarySourceBonus       Float @default(1.0)
+  independentCorroboration Float @default(1.3)
+  creatorCoverageCount     Float @default(0.8)
+  manualBoostWeight        Float @default(3.0)
+}
+
+enum FeedbackType {
+  MORE_LIKE_THIS
+  LESS_LIKE_THIS
+  NOT_RELEVANT
+}
+
+model TopicFeedback {
+  id        String       @id @default(cuid())
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topicId   String
+  topic     Topic        @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  feedback  FeedbackType
+  createdAt DateTime     @default(now())
+
+  @@index([userId, topicId])
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Pipeline observability — quota tracking + run history (also useful to show
+// the pipeline is real and working, not just "trust me")
+// ───────────────────────────────────────────────────────────────────
+
+model YouTubeQuotaLog {
+  id        String   @id @default(cuid())
+  date      DateTime @db.Date
+  callType  String // "search" | "videos" | "channels" etc.
+  units     Int
+  createdAt DateTime @default(now())
+
+  @@index([date])
+}
+
+enum PipelineStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+  DEGRADED // completed, but one or more sub-steps were skipped/capped
+}
+
+model PipelineRun {
+  id               String         @id @default(cuid())
+  startedAt        DateTime       @default(now())
+  finishedAt       DateTime?
+  status           PipelineStatus @default(RUNNING)
+  storiesProcessed Int            @default(0)
+  topicsCreated    Int            @default(0)
+  topicsUpdated    Int            @default(0)
+  warnings         String[]
+  errorMessage     String?
+}
