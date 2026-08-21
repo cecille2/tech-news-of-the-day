@@ -11,10 +11,10 @@ import { prisma } from "@/lib/db";
  * and throw a unique constraint violation the first time two calls overlap.
  */
 export async function getCurrentUser() {
-  const email = process.env.OWNER_EMAIL ?? "owner@example.com";
+  const email = process.env.OWNER_EMAIL || "owner@example.com";
   return prisma.user.upsert({
     where: { email },
     update: {},
-    create: { email, timezone: process.env.OWNER_TIMEZONE ?? "America/Los_Angeles" },
+    create: { email, timezone: process.env.OWNER_TIMEZONE || "America/Los_Angeles" },
   });
 }

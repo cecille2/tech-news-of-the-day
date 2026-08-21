@@ -63,7 +63,14 @@ export async function getUsersDueForBriefingNow() {
   const now = new Date();
 
   return users.filter((user) => {
-    const local = new Date(now.toLocaleString("en-US", { timeZone: user.timezone }));
+    // A malformed timezone (e.g. a blank string from a bad env var) throws
+    // RangeError — skip that one user rather than crashing the whole run.
+    let local: Date;
+    try {
+      local = new Date(now.toLocaleString("en-US", { timeZone: user.timezone }));
+    } catch {
+      return false;
+    }
     return local.getHours() === user.briefingHour && local.getMinutes() < 30;
     // 30-minute window matches a pipeline that runs every ~30 min, per the
     // GitHub Actions cron cadence in .github/workflows/daily-pipeline.yml.
