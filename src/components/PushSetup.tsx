@@ -21,6 +21,7 @@ function initialStatus(): Status {
 
 export function PushSetup() {
   const [status, setStatus] = useState<Status>(initialStatus);
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
 
   useEffect(() => {
     if (status !== "idle") return;
@@ -34,6 +35,7 @@ export function PushSetup() {
   async function subscribe() {
     const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
     if (!publicKey) {
+      setErrorDetail("NEXT_PUBLIC_VAPID_PUBLIC_KEY is missing from this build.");
       setStatus("error");
       return;
     }
@@ -48,16 +50,23 @@ export function PushSetup() {
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(publicKey),
       });
-      await fetch("/api/push/subscribe", {
+      const res = await fetch("/api/push/subscribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(subscription.toJSON()),
       });
+      if (!res.ok) {
+        setErrorDetail(`/api/push/subscribe returned ${res.status}`);
+        setStatus("error");
+        return;
+      }
       setStatus("subscribed");
-    } catch {
-      // iOS throws here instead of just declining if the page isn't running
-      // as an installed home-screen PWA (Add to Home Screen) — surface that
-      // rather than failing completely silently.
+    } catch (err) {
+      // Show the real error instead of guessing — a NotAllowedError here
+      // usually means the page isn't running as an installed home-screen
+      // PWA, but other errors (bad key, network) look different.
+      const e = err as { name?: string; message?: string };
+      setErrorDetail(`${e?.name ?? "Error"}: ${e?.message ?? String(err)}`);
       setStatus("error");
     }
   }
@@ -84,8 +93,7 @@ export function PushSetup() {
       )}
       {status === "error" && (
         <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
-          Couldn&apos;t enable push here — on iPhone, make sure you opened this from the home screen icon
-          (Add to Home Screen), not from a Safari tab.
+          Couldn&apos;t enable push: {errorDetail ?? "unknown error"}
         </p>
       )}
       <p className="text-xs text-neutral-500 mt-2">
