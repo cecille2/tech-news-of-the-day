@@ -37,22 +37,29 @@ export function PushSetup() {
       setStatus("error");
       return;
     }
-    const permission = await Notification.requestPermission();
-    if (permission !== "granted") {
-      setStatus("denied");
-      return;
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") {
+        setStatus("denied");
+        return;
+      }
+      const reg = await navigator.serviceWorker.ready;
+      const subscription = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
+      });
+      await fetch("/api/push/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(subscription.toJSON()),
+      });
+      setStatus("subscribed");
+    } catch {
+      // iOS throws here instead of just declining if the page isn't running
+      // as an installed home-screen PWA (Add to Home Screen) — surface that
+      // rather than failing completely silently.
+      setStatus("error");
     }
-    const reg = await navigator.serviceWorker.ready;
-    const subscription = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey),
-    });
-    await fetch("/api/push/subscribe", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(subscription.toJSON()),
-    });
-    setStatus("subscribed");
   }
 
   if (status === "unsupported") {
@@ -73,6 +80,12 @@ export function PushSetup() {
       {status === "denied" && (
         <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
           Notification permission was denied — enable it in your browser/OS settings and try again.
+        </p>
+      )}
+      {status === "error" && (
+        <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
+          Couldn&apos;t enable push here — on iPhone, make sure you opened this from the home screen icon
+          (Add to Home Screen), not from a Safari tab.
         </p>
       )}
       <p className="text-xs text-neutral-500 mt-2">
