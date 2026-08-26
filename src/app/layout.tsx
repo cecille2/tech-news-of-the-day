@@ -25,7 +25,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col bg-neutral-50 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100">
         <header className="border-b border-neutral-200 dark:border-neutral-800">
-          <nav className="max-w-3xl mx-auto px-4 py-3 flex items-center gap-1">
+          <nav className="max-w-3xl mx-auto px-4 py-3 flex flex-wrap items-center gap-x-1 gap-y-2">
             <span className="font-semibold mr-4">Daily Briefing</span>
             {NAV.map((item) => (
               <Link
