@@ -30,6 +30,13 @@ model User {
   // the snoozed push goes out. Server-driven so it works regardless of
   // whether any browser service worker is still alive to run a timer.
   pendingDigestReminderAt DateTime?
+  // When the daily digest was last actually sent. Due-detection compares
+  // this against "now" in the user's local calendar day rather than
+  // requiring the pipeline to land inside a narrow post-briefingHour
+  // window — GitHub Actions' scheduling jitter (a run landing a few
+  // minutes late) can otherwise cause a briefing to be silently skipped
+  // for the entire day. See getUsersDueForBriefingNow in webpush.ts.
+  lastDigestSentAt DateTime?
   createdAt    DateTime @default(now())
 
   pushSubscriptions     PushSubscription[]

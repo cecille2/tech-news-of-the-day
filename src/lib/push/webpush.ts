@@ -65,8 +65,13 @@ async function cleanUpDeadSubscriptions(
   }
 }
 
-/** Users whose local time currently matches their stored briefing time —
- * this is what lets the schedule be per-user rather than one hard-coded timezone. */
+/** Users who are past today's briefing time and haven't been sent today's
+ * digest yet. Deliberately NOT a narrow "are we within 30 minutes of
+ * briefingHour" window — GitHub Actions' scheduling jitter (a run landing
+ * even a few minutes late) can push a run past a fixed window and silently
+ * skip the user for the entire day. Instead this catches up on whatever the
+ * next run happens to be, and lastDigestSentAt (set by the caller after a
+ * successful send) prevents re-sending later the same local day. */
 export async function getUsersDueForBriefingNow() {
   const users = await prisma.user.findMany();
   const now = new Date();
@@ -80,13 +85,22 @@ export async function getUsersDueForBriefingNow() {
     } catch {
       return false;
     }
-    const isDue = local.getHours() === user.briefingHour && local.getMinutes() < 30;
+
+    const pastBriefingTime =
+      local.getHours() > user.briefingHour ||
+      (local.getHours() === user.briefingHour && local.getMinutes() >= user.briefingMin);
+
+    let alreadySentToday = false;
+    if (user.lastDigestSentAt) {
+      const lastLocal = new Date(user.lastDigestSentAt.toLocaleString("en-US", { timeZone: user.timezone }));
+      alreadySentToday = lastLocal.toDateString() === local.toDateString();
+    }
+
+    const isDue = pastBriefingTime && !alreadySentToday;
     console.log(
-      `[pipeline] user ${user.id}: timezone=${user.timezone} briefingHour=${user.briefingHour} localHour=${local.getHours()} localMinute=${local.getMinutes()} due=${isDue}`,
+      `[pipeline] user ${user.id}: timezone=${user.timezone} briefingHour=${user.briefingHour} localHour=${local.getHours()} localMinute=${local.getMinutes()} lastDigestSentAt=${user.lastDigestSentAt?.toISOString() ?? "never"} due=${isDue}`,
     );
     return isDue;
-    // 30-minute window matches a pipeline that runs every ~30 min, per the
-    // GitHub Actions cron cadence in .github/workflows/daily-pipeline.yml.
   });
 }
 
