@@ -17,31 +17,42 @@ function ensureConfigured() {
   configured = true;
 }
 
-export interface MorningPushPayload {
+export interface TopicPushPayload {
+  topicId: string;
   title: string;
-  body: string;
-  topicCount: number;
+  summary: string;
   url: string;
 }
 
-/** Sends one push per subscribed device for a user. VAPID/Web Push has no
- * quota and no billing surface — it structurally cannot cost money. */
-export async function sendMorningPush(userId: string, payload: MorningPushPayload) {
+/** Sends one push per story per subscribed device — each story stacks as
+ * its own notification (see tag handling in public/sw.js) rather than
+ * collapsing into a single "briefing ready" banner. */
+export async function sendTopicPushes(userId: string, topics: TopicPushPayload[]) {
   ensureConfigured();
   const subscriptions = await prisma.pushSubscription.findMany({ where: { userId } });
 
   const results = await Promise.allSettled(
-    subscriptions.map((sub) =>
-      webpush.sendNotification(
-        {
-          endpoint: sub.endpoint,
-          keys: { p256dh: sub.p256dh, auth: sub.auth },
-        },
-        JSON.stringify(payload),
+    subscriptions.flatMap((sub) =>
+      topics.map((topic) =>
+        webpush.sendNotification(
+          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+          JSON.stringify({ title: topic.title, body: topic.summary, url: topic.url, tag: `topic-${topic.topicId}` }),
+        ),
       ),
     ),
   );
 
+  // Map each result back to its subscription (results are grouped by
+  // subscription since flatMap preserves outer-then-inner order).
+  const subscriptionForResultIndex = subscriptions.flatMap((sub) => topics.map(() => sub));
+  await cleanUpDeadSubscriptions(subscriptionForResultIndex, results);
+  return results;
+}
+
+async function cleanUpDeadSubscriptions(
+  subscriptions: { id: string }[],
+  results: PromiseSettledResult<unknown>[],
+) {
   // A 404/410 means the subscription is dead (user uninstalled, cleared
   // storage, etc.) — clean it up rather than retrying it forever.
   for (const [i, result] of results.entries()) {
@@ -52,8 +63,6 @@ export async function sendMorningPush(userId: string, payload: MorningPushPayloa
       }
     }
   }
-
-  return results;
 }
 
 /** Users whose local time currently matches their stored briefing time —

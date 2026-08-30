@@ -10,7 +10,7 @@ import { getOrCreateDefaultWeights, scoreTopic } from "@/lib/ranking/rank";
 import {
   getUsersDueForBriefingNow,
   getAndClearUsersDueForSnoozedReminder,
-  sendMorningPush,
+  sendTopicPushes,
 } from "@/lib/push/webpush";
 import type { SourceTier } from "@/generated/prisma/client";
 
@@ -20,6 +20,18 @@ import type { SourceTier } from "@/generated/prisma/client";
 const MAX_CANDIDATE_STORIES_PER_RUN = 300;
 const MAX_NEW_TOPICS_PER_RUN = 60;
 const FAILURE_THRESHOLD_TO_AUTO_DISABLE = 5;
+
+// Each due user gets one push per story, capped so a heavy news day (dozens
+// of new/updated topics) doesn't turn into notification spam.
+const TOP_STORIES_PER_DIGEST = 5;
+
+/** First sentence (or a hard truncation) of a briefing section — keeps a
+ * push notification body glanceable rather than dumping the full paragraph. */
+function firstSentence(text: string, maxLen = 160): string {
+  const match = new RegExp(`^.{1,${maxLen}}?[.!?](\\s|$)`).exec(text);
+  if (match) return match[0].trim();
+  return text.length > maxLen ? `${text.slice(0, maxLen).trim()}…` : text;
+}
 
 interface PolledCandidate extends CandidateStory {
   tier: SourceTier;
@@ -342,16 +354,25 @@ export async function runDailyPipeline(): Promise<PipelineResult> {
     );
 
     if (newToday > 0) {
+      const topStories = await prisma.topic.findMany({
+        where: { firstSeenAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+        orderBy: { rankScore: "desc" },
+        take: TOP_STORIES_PER_DIGEST,
+      });
+      const topicPushes = topStories.map((topic) => ({
+        topicId: topic.id,
+        title: topic.title,
+        summary: firstSentence(topic.whatHappened ?? topic.title),
+        url: `/#topic-${topic.id}`,
+      }));
+
       for (const user of usersToNotify.values()) {
         try {
-          const results = await sendMorningPush(user.id, {
-            title: "Today's briefing is ready",
-            body: `${newToday} new topic${newToday === 1 ? "" : "s"} worth a look.`,
-            topicCount: newToday,
-            url: "/",
-          });
+          const results = await sendTopicPushes(user.id, topicPushes);
           const succeeded = results.filter((r) => r.status === "fulfilled").length;
-          console.log(`[pipeline] push to user ${user.id}: ${succeeded}/${results.length} subscriptions succeeded`);
+          console.log(
+            `[pipeline] push to user ${user.id}: ${succeeded}/${results.length} sends succeeded (${topicPushes.length} stories)`,
+          );
           if (results.length === 0) {
             console.log(`[pipeline] user ${user.id} has zero push subscriptions on file`);
           }

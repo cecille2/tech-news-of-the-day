@@ -15,7 +15,10 @@ self.addEventListener("push", (event) => {
         { action: "open", title: "Open" },
         { action: "remind", title: "Remind me later" },
       ],
-      tag: "daily-briefing", // one notification per morning, not a stack
+      // Each story gets its own tag (topic-<id>) so they stack like separate
+      // emails instead of collapsing into one — falls back to a shared tag
+      // for anything that isn't a per-story push.
+      tag: payload.tag ?? "daily-briefing",
     }),
   );
 });

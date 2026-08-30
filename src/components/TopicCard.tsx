@@ -39,7 +39,10 @@ function Section({ label, text }: { label: string; text: string | null }) {
 
 export function TopicCard({ topic }: { topic: TopicCardData }) {
   return (
-    <article className="rounded-xl border border-neutral-200 dark:border-neutral-800 p-5 bg-white dark:bg-neutral-900">
+    <article
+      id={`topic-${topic.id}`}
+      className="rounded-xl border border-neutral-200 dark:border-neutral-800 p-5 bg-white dark:bg-neutral-900"
+    >
       <div className="flex items-start justify-between gap-3">
         <h2 className="text-lg font-semibold leading-snug">{topic.title}</h2>
         {topic.verificationStatus === "UNVERIFIED" && (
