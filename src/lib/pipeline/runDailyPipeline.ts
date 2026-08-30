@@ -337,20 +337,33 @@ export async function runDailyPipeline(): Promise<PipelineResult> {
     const snoozedUsers = await getAndClearUsersDueForSnoozedReminder();
     // A user could be in both lists (rare) — dedupe so they get one push, not two.
     const usersToNotify = new Map([...dueUsers, ...snoozedUsers].map((u) => [u.id, u]));
+    console.log(
+      `[pipeline] newToday=${newToday} dueUsers=${dueUsers.length} snoozedUsers=${snoozedUsers.length} usersToNotify=${usersToNotify.size}`,
+    );
 
     if (newToday > 0) {
       for (const user of usersToNotify.values()) {
         try {
-          await sendMorningPush(user.id, {
+          const results = await sendMorningPush(user.id, {
             title: "Today's briefing is ready",
             body: `${newToday} new topic${newToday === 1 ? "" : "s"} worth a look.`,
             topicCount: newToday,
             url: "/",
           });
+          const succeeded = results.filter((r) => r.status === "fulfilled").length;
+          console.log(`[pipeline] push to user ${user.id}: ${succeeded}/${results.length} subscriptions succeeded`);
+          if (results.length === 0) {
+            console.log(`[pipeline] user ${user.id} has zero push subscriptions on file`);
+          }
+          for (const r of results) {
+            if (r.status === "rejected") console.log(`[pipeline] push rejection: ${JSON.stringify(r.reason)}`);
+          }
         } catch (err) {
           warnings.push(`Push failed for user ${user.id}: ${(err as Error).message}`);
         }
       }
+    } else {
+      console.log("[pipeline] skipping push send: no new topics today");
     }
 
     const status = warnings.length > 0 ? "DEGRADED" : "SUCCESS";

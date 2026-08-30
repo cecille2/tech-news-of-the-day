@@ -71,7 +71,11 @@ export async function getUsersDueForBriefingNow() {
     } catch {
       return false;
     }
-    return local.getHours() === user.briefingHour && local.getMinutes() < 30;
+    const isDue = local.getHours() === user.briefingHour && local.getMinutes() < 30;
+    console.log(
+      `[pipeline] user ${user.id}: timezone=${user.timezone} briefingHour=${user.briefingHour} localHour=${local.getHours()} localMinute=${local.getMinutes()} due=${isDue}`,
+    );
+    return isDue;
     // 30-minute window matches a pipeline that runs every ~30 min, per the
     // GitHub Actions cron cadence in .github/workflows/daily-pipeline.yml.
   });
