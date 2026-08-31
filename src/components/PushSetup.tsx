@@ -11,7 +11,14 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   return output;
 }
 
-type Status = "idle" | "subscribed" | "unsupported" | "denied" | "error";
+function arrayBufferToBase64Url(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+type Status = "idle" | "subscribed" | "keyMismatch" | "unsupported" | "denied" | "error";
 
 function initialStatus(): Status {
   if (typeof window === "undefined") return "idle";
@@ -27,7 +34,22 @@ export function PushSetup() {
     if (status !== "idle") return;
     navigator.serviceWorker.register("/sw.js").then((reg) =>
       reg.pushManager.getSubscription().then((sub) => {
-        if (sub) setStatus("subscribed");
+        if (!sub) return;
+        // A subscription created against an older VAPID key (e.g. from
+        // earlier troubleshooting) will be silently rejected by the push
+        // service forever — compare against what's actually deployed now
+        // rather than trusting "a subscription exists" as "it'll work."
+        const currentKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+        const subKeyBuffer = sub.options.applicationServerKey;
+        if (currentKey && subKeyBuffer) {
+          const subKey = arrayBufferToBase64Url(subKeyBuffer);
+          const normalizedCurrentKey = currentKey.replace(/=+$/, "");
+          if (subKey !== normalizedCurrentKey) {
+            setStatus("keyMismatch");
+            return;
+          }
+        }
+        setStatus("subscribed");
       }),
     );
   }, [status]);
@@ -71,11 +93,40 @@ export function PushSetup() {
     }
   }
 
+  async function resubscribe() {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const existing = await reg.pushManager.getSubscription();
+      if (existing) await existing.unsubscribe();
+      setStatus("idle");
+      await subscribe();
+    } catch (err) {
+      const e = err as { name?: string; message?: string };
+      setErrorDetail(`${e?.name ?? "Error"}: ${e?.message ?? String(err)}`);
+      setStatus("error");
+    }
+  }
+
   if (status === "unsupported") {
     return <p className="text-sm text-neutral-500">Push isn&apos;t supported in this browser.</p>;
   }
   if (status === "subscribed") {
     return <p className="text-sm text-emerald-600 dark:text-emerald-400">Push notifications are on.</p>;
+  }
+  if (status === "keyMismatch") {
+    return (
+      <div>
+        <p className="text-sm text-amber-600 dark:text-amber-400">
+          Your subscription was created with an older key and won&apos;t receive pushes.
+        </p>
+        <button
+          onClick={resubscribe}
+          className="mt-2 text-sm px-3 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+        >
+          Refresh subscription
+        </button>
+      </div>
+    );
   }
 
   return (
