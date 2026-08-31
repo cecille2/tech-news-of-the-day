@@ -46,10 +46,24 @@ function ensureConfigured() {
     );
   }
   if (!isValidVapidSubject(subject)) {
+    // Don't interpolate the raw value — GitHub redacts any log line
+    // containing a secret's literal text to "***", which would hide the
+    // one thing we need to see. These derived facts aren't a literal
+    // substring match against the secret, so they print through.
+    const rawSubject = process.env.VAPID_SUBJECT ?? "";
+    const diagnostics = {
+      length: rawSubject.length,
+      trimmedLength: subject.length,
+      startsWithMailto: rawSubject.toLowerCase().startsWith("mailto:"),
+      startsWithHttps: rawSubject.toLowerCase().startsWith("https://"),
+      hasAtSign: rawSubject.includes("@"),
+      firstCharCodes: [...rawSubject.slice(0, 12)].map((c) => c.charCodeAt(0)),
+      lastCharCodes: [...rawSubject.slice(-12)].map((c) => c.charCodeAt(0)),
+    };
     throw new Error(
-      `VAPID_SUBJECT is set to "${subject}", which Apple's push service will silently reject with a 403 ` +
-        'BadJwtToken. It must be exactly "mailto:you@example.com" or "https://your-site.example" with no ' +
-        "extra whitespace — check GitHub Actions secrets for a stray trailing newline or space.",
+      "VAPID_SUBJECT is not a valid mailto:/https: value, which Apple's push service will silently reject " +
+        `with a 403 BadJwtToken. Diagnostics (raw value withheld by GitHub's secret redaction): ${JSON.stringify(diagnostics)}. ` +
+        "Char code 10 = \\n, 13 = \\r, 32 = space — look for one of those where it shouldn't be.",
     );
   }
   // Public key only — never log the private key. This exists to answer one
