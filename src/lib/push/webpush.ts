@@ -1,7 +1,24 @@
 import webpush from "web-push";
+import crypto from "node:crypto";
 import { prisma } from "@/lib/db";
 
 let configured = false;
+
+/** True only if privateKey actually derives publicKey — catches a
+ * transcription slip in one of two separately-pasted, unviewable "Secret"
+ * env vars, which otherwise manifests as every push silently failing with
+ * an opaque 403 BadJwtToken from the push service instead of a clear error. */
+function vapidKeysMatch(publicKeyB64url: string, privateKeyB64url: string): boolean {
+  try {
+    const ecdh = crypto.createECDH("prime256v1");
+    ecdh.setPrivateKey(Buffer.from(privateKeyB64url, "base64url"));
+    const derivedPublicKey = ecdh.getPublicKey();
+    const providedPublicKey = Buffer.from(publicKeyB64url, "base64url");
+    return Buffer.compare(derivedPublicKey, providedPublicKey) === 0;
+  } catch {
+    return false;
+  }
+}
 
 function ensureConfigured() {
   if (configured) return;
@@ -11,6 +28,13 @@ function ensureConfigured() {
   if (!publicKey || !privateKey) {
     throw new Error(
       "VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY are not set. Generate a pair with `npx web-push generate-vapid-keys` and add them to .env.",
+    );
+  }
+  if (!vapidKeysMatch(publicKey, privateKey)) {
+    throw new Error(
+      "VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY do not form a matching keypair — every push would otherwise fail " +
+        "with an opaque 403 from the push service. Regenerate both with `npx web-push generate-vapid-keys` and " +
+        "re-set both values together (in Vercel and in GitHub Actions secrets).",
     );
   }
   webpush.setVapidDetails(subject, publicKey, privateKey);
