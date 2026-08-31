@@ -379,11 +379,14 @@ export async function runDailyPipeline(): Promise<PipelineResult> {
           for (const r of results) {
             if (r.status === "rejected") console.log(`[pipeline] push rejection: ${JSON.stringify(r.reason)}`);
           }
-          // Mark today handled even with zero subscriptions — otherwise a
-          // user with no working subscription would appear "due" on every
-          // run for the rest of the day. Enabling push later that same day
-          // means waiting until tomorrow's briefing; acceptable at this scale.
-          await prisma.user.update({ where: { id: user.id }, data: { lastDigestSentAt: new Date() } });
+          // Only mark today handled if something actually got delivered, or
+          // there was truly nothing to deliver to (zero subscriptions). A
+          // real send failure (bad VAPID key, expired subscription, etc.)
+          // should retry on the next run rather than silently forfeiting
+          // the whole day — that's exactly the case that just bit us.
+          if (succeeded > 0 || results.length === 0) {
+            await prisma.user.update({ where: { id: user.id }, data: { lastDigestSentAt: new Date() } });
+          }
         } catch (err) {
           warnings.push(`Push failed for user ${user.id}: ${(err as Error).message}`);
         }

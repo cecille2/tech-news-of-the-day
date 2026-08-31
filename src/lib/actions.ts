@@ -205,7 +205,13 @@ export async function setCreatorPlatformPref(followId: string, platform: Platfor
 
 export async function updateBriefingSchedule(timezone: string, briefingHour: number, briefingMin: number) {
   const user = await getCurrentUser();
-  await prisma.user.update({ where: { id: user.id }, data: { timezone, briefingHour, briefingMin } });
+  // Clearing lastDigestSentAt means changing your briefing time gives you a
+  // fresh shot at today's digest at the new time, rather than being blocked
+  // by whatever happened (or didn't) at the old time.
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { timezone, briefingHour, briefingMin, lastDigestSentAt: null },
+  });
   revalidatePath("/settings");
 }
 
