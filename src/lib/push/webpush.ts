@@ -20,11 +20,19 @@ function vapidKeysMatch(publicKeyB64url: string, privateKeyB64url: string): bool
   }
 }
 
+/** Apple's push service rejects the whole JWT with a bare 403 BadJwtToken —
+ * no detail — if the "sub" claim isn't exactly "mailto:x" or "https://x".
+ * A hand-pasted env var with a stray trailing newline/space still "looks"
+ * fine and passes an emptiness check, so validate the shape explicitly. */
+function isValidVapidSubject(subject: string): boolean {
+  return /^mailto:\S+@\S+$/i.test(subject) || /^https:\/\/\S+$/i.test(subject);
+}
+
 function ensureConfigured() {
   if (configured) return;
-  const publicKey = process.env.VAPID_PUBLIC_KEY;
-  const privateKey = process.env.VAPID_PRIVATE_KEY;
-  const subject = process.env.VAPID_SUBJECT ?? "mailto:you@example.com";
+  const publicKey = process.env.VAPID_PUBLIC_KEY?.trim();
+  const privateKey = process.env.VAPID_PRIVATE_KEY?.trim();
+  const subject = (process.env.VAPID_SUBJECT ?? "mailto:you@example.com").trim();
   if (!publicKey || !privateKey) {
     throw new Error(
       "VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY are not set. Generate a pair with `npx web-push generate-vapid-keys` and add them to .env.",
@@ -37,6 +45,20 @@ function ensureConfigured() {
         "re-set both values together (in Vercel and in GitHub Actions secrets).",
     );
   }
+  if (!isValidVapidSubject(subject)) {
+    throw new Error(
+      `VAPID_SUBJECT is set to "${subject}", which Apple's push service will silently reject with a 403 ` +
+        'BadJwtToken. It must be exactly "mailto:you@example.com" or "https://your-site.example" with no ' +
+        "extra whitespace — check GitHub Actions secrets for a stray trailing newline or space.",
+    );
+  }
+  // Public key only — never log the private key. This exists to answer one
+  // question directly: does the keypair GitHub Actions signs pushes with
+  // actually match NEXT_PUBLIC_VAPID_PUBLIC_KEY (the one the phone
+  // subscribed against on Vercel)? The two were hand-set in separate
+  // secret stores at separate times, so "both keypairs are internally
+  // self-consistent" doesn't guarantee "both stores hold the same keypair."
+  console.log(`[pipeline] VAPID_PUBLIC_KEY in use (GitHub Actions): ${publicKey}`);
   webpush.setVapidDetails(subject, publicKey, privateKey);
   configured = true;
 }
