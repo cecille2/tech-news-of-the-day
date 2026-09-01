@@ -5,9 +5,16 @@ name: Daily briefing pipeline
 # getUsersDueForBriefingNow(). The pipeline itself (ingest/cluster/rank/
 # synthesize) is idempotent and cheap to re-run thanks to conditional-GET +
 # content-hash dedup, so running it this often does not mean redoing work.
+#
+# Offset to :07/:37 rather than :00/:30 on purpose — GitHub explicitly
+# documents that scheduled workflows queue behind everyone else's crons at
+# the top of the hour and half-hour (the single most common schedule on the
+# whole platform), and confirmed here as multi-hour delays on a plain
+# */30 schedule. Off-mark minutes see much less contention, though GitHub
+# still gives no hard delivery-time guarantee for "schedule" triggers.
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "7,37 * * * *"
   workflow_dispatch: {} # manual trigger, e.g. for a first test run
 
 # Hard timeout — see README § accidental-charge protection. A hung job gets
